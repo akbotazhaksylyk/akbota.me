@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <style>
+    html, body {
+      height: 100%;
+      width: 100%;
+      margin: 0;
+      padding: 0;
+      background-color: black;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      flex-direction: column;
+      color: white;
+      font-family: sans-serif;
+      overflow: hidden;
+    }
+    #screen {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      width: 100vw;
+      height: 100vh;
+    }
+    @media (max-width: 768px) {
+      html, body {
+        justify-content: flex-start;
+      }
+      #screen {
+        height: auto;
+        max-height: 100vh;
+      }
+    }
+    #screen canvas {
+      width: 100% !important;
+      height: 100% !important;
+      object-fit: contain;
+    }
+    #loading {
+      margin-bottom: 1rem;
+      font-size: 1.25rem;
+      text-align: center;
+    }
+    #keyboard-input {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+      z-index: -1;
+    }
+  </style>
+</head>
+<body>
+  <div id="loading">Loading...</div>
+  <div id="screen"></div>
+  <input id="keyboard-input" type="password" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
+
+  <script src="vendor/libv86.js"></script>
+  <script>
+    window.onload = function() {
+      const loadingEl = document.getElementById("loading");
+
+      const emulator = new V86({
+        screen: {
+          container: document.getElementById("screen"),
+          use_graphical_text: false,
+        },
+        wasm_path: "vendor/v86.wasm",
+        memory_size: 512 * 1024 * 1024,
+        vga_memory_size: 8 * 1024 * 1024,
+        bios: { url: "vendor/seabios.bin" },
+        vga_bios: { url: "vendor/vgabios.bin" },
+        initial_state: { url: "dist/alpine-state.bin.zst" },
+        autostart: true,
+        filesystem: {
+            baseurl: "dist/alpine-rootfs-flat",
+            basefs: "dist/alpine-fs.json",
+        },
+        bzimage_initrd_from_filesystem: true,
+        cmdline: "rw root=host9p rootfstype=9p rootflags=trans=virtio,cache=loose modules=virtio_pci tsc=reliable",
+        net_device: {
+          type: "virtio",
+          relay_url: "inbrowser",
+          mtu: 1500,
+        },
+      });
+
+      emulator.add_listener("download-progress", e => {
+        if (e.total) {
+          const percent = Math.floor(e.loaded / e.total * 100);
+          loadingEl.textContent = `Loading ${e.file_name.split("?")[0]}: ${percent}%`;
+        } else {
+          loadingEl.textContent = `Loading ${e.file_name.split("?")[0]} ...`;
+        }
+      });
+
+      emulator.add_listener("emulator-loaded", () => {
+        loadingEl.style.display = "none";
+        document.getElementById("screen").style.display = "";
+
+        // Setup mobile keyboard support
+        const screenEl = document.getElementById("screen");
+        const keyboardInput = document.getElementById("keyboard-input");
+
+        // Detect if this is a touch device
+        const isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+
+        if (isTouchDevice) {
+          // Mobile: use hidden input for keyboard
+          const focusInput = () => {
+            keyboardInput.focus({ preventScroll: true });
+          };
+
+          screenEl.addEventListener("click", focusInput);
+          screenEl.addEventListener("touchstart", focusInput);
+
+          // Handle special keys on mobile
+          keyboardInput.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              emulator.keyboard_send_text("\n");
+            } else if (e.key === "Backspace") {
+              e.preventDefault();
+              emulator.keyboard_send_text("\b");
+            } else if (e.key === "Tab") {
+              e.preventDefault();
+              emulator.keyboard_send_text("\t");
+            }
+          });
+
+          // Forward regular text input to emulator
+          keyboardInput.addEventListener("input", (e) => {
+            const text = e.target.value;
+            if (text) {
+              for (let i = 0; i < text.length; i++) {
+                emulator.keyboard_send_text(text[i]);
+              }
+              keyboardInput.value = "";
+            }
+          });
+
+          // Keep input focused on mobile
+          keyboardInput.addEventListener("blur", () => {
+            setTimeout(() => {
+              keyboardInput.focus({ preventScroll: true });
+            }, 0);
+          });
+
+          // Auto-focus on load for mobile
+          setTimeout(() => {
+            keyboardInput.focus({ preventScroll: true });
+          }, 100);
+        } else {
+          // Desktop: only prevent Ctrl+W (close tab) to avoid accidents
+          // Let V86 handle all keyboard events natively
+          document.addEventListener("keydown", (e) => {
+            if ((e.ctrlKey || e.metaKey) && (e.key === "w" || e.key === "W")) {
+              e.preventDefault();
+            }
+          });
+        }
+      });
+    }
+  </script>
+</body>
+</html>
